@@ -1,0 +1,24 @@
+[project]
+name = "brian2-cppyy-poc"
+version = "0.1.0"
+description = "Proof of concept showing cppyy as a replacement for Cython in Brian2"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "cppyy>=3.1.0",
+    "numpy>=1.24.0",
+    "jinja2>=3.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cppyy_poc"]
+
+[tool.uv]
+dev-dependencies = [
+    "ipython>=8.0.0",
+]

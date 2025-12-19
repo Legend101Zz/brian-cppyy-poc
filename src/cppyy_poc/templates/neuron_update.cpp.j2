@@ -1,0 +1,27 @@
+// Auto-generated C++ code for neuron state update
+// This function was generated from a differential equation by the
+// Brian2-style template system. It will be JIT compiled by cppyy.
+
+#include <cmath>
+
+void {{ function_name }}(
+    {% for param in parameters -%}
+    {{ param }}{% if not loop.last %},{% endif %}
+
+    {% endfor -%}
+) {
+    // Integration loop: {{ equation }}
+    // Each iteration updates one neuron using Euler integration
+    
+    for (int {{ loop_variable }} = 0; {{ loop_variable }} < n_neurons; {{ loop_variable }}++) {
+        // Read current state
+        double v_current = v[{{ loop_variable }}];
+        double I_current = I[{{ loop_variable }}];
+        
+        // Compute derivative
+        double dv_dt = {{ equation_rhs }};
+        
+        // Euler integration step: v_new = v_old + dt * dv_dt
+        v[{{ loop_variable }}] = v_current + dt * dv_dt;
+    }
+}
