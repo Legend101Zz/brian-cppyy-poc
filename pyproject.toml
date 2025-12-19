@@ -8,6 +8,8 @@ dependencies = [
     "cppyy>=3.1.0",
     "numpy>=1.24.0",
     "jinja2>=3.1.0",
+    "psutil>=5.9.0",
+    "rich>=13.0.0",  
 ]
 
 [build-system]
@@ -21,4 +23,5 @@ packages = ["src/cppyy_poc"]
 [tool.uv]
 dev-dependencies = [
     "ipython>=8.0.0",
+    "matplotlib>=3.7.0",
 ]
