@@ -12,12 +12,12 @@ Compare this to Brian2's Cython approach:
 - cppyy: String → JIT compile → execute (all in memory!)
 """
 
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 import cppyy
 import numpy as np
 
-from .variables import ArrayVariable, Constant, Variable
+from .variables import ArrayVariable, Constant, DynamicArrayVariable, Variable
 
 
 class CppyyCodeObject:
@@ -35,14 +35,22 @@ class CppyyCodeObject:
     - After compile(): AST exists in Cling, symbol registered
     - After first __call__: Machine code exists in executable memory
     - Subsequent __call__s: Direct machine code execution
-    """
     
+    Attributes:
+    name: Human-readable name for debugging
+    code: The C++ source code
+    function_name: Name of the C++ function
+    variables: Dictionary of Variable objects
+    compiled_function: The cppyy function proxy after compilation
+    namespace: Arguments to pass to the function
+    """
     def __init__(
         self,
         name: str,
         code: str,
         function_name: str,
-        variables: Dict[str, Variable]
+        variables: Dict[str, Variable],
+        verbose: bool = True
     ):
         """
         Create a CodeObject.
@@ -52,22 +60,28 @@ class CppyyCodeObject:
             code: The complete C++ code as a string
             function_name: Name of the C++ function to call
             variables: Dictionary of Variable objects
+            verbose: If True, print compilation progress
         """
         self.name = name
         self.code = code
         self.function_name = function_name
         self.variables = variables
+        self.verbose = verbose
         
-        # This will hold the cppyy function proxy after compilation
-        self.compiled_function = None
+        # These will be set during compilation
+        self.compiled_function: Optional[Callable] = None
+        self.namespace: Dict[str, Any] = {}
         
-        # This will hold the arguments to pass to the function
-        self.namespace = {}
+        # Track execution count for debugging
+        self._execution_count = 0
+        self._first_call_done = False
         
         # Compile immediately
-        print(f"\n{'='*70}")
-        print(f"Creating CodeObject: {name}")
-        print(f"{'='*70}")
+        if self.verbose:
+            print(f"\n{'='*70}")
+            print(f"Creating CodeObject: {name}")
+            print(f"{'='*70}")
+        
         self.compile()
     
     def compile(self):
@@ -88,9 +102,10 @@ class CppyyCodeObject:
         - Symbol table: Has function metadata
         - Executable memory: Empty (compilation happens on first call)
         """
-        print(f"\nCOMPILATION PHASE")
-        print(f"   Feeding C++ code to cppyy...")
-        print(f"   Code length: {len(self.code)} characters")
+        if self.verbose:
+            print(f"\n   COMPILATION PHASE")
+            print(f"   Feeding C++ code to cppyy...")
+            print(f"   Code length: {len(self.code)} characters")
         
         try:
             # This is THE critical call!
@@ -104,13 +119,14 @@ class CppyyCodeObject:
             
             cppyy.cppdef(self.code)
             
-            print(f"Parsing complete")
-            print(f"AST built in Cling's memory")
-            print(f"Function '{self.function_name}' registered")
-            print(f"Machine code NOT generated yet (lazy!)")
+            if self.verbose:
+                print(f"Parsing complete")
+                print(f"AST built in Cling's memory")
+                print(f"Function '{self.function_name}' registered")
+                print(f"Machine code NOT generated yet (lazy!)")
             
         except Exception as e:
-            print(f"\nCOMPILATION FAILED!")
+            print(f"\n COMPILATION FAILED!")
             print(f"   Error: {e}")
             print(f"\n   Generated code:")
             print(f"   {'-'*70}")
@@ -121,16 +137,16 @@ class CppyyCodeObject:
         
         # Get a reference to the function
         # This creates a Python proxy object
-        print(f"\n Getting function reference...")
+        if self.verbose:
+            print(f"\n   Getting function reference...")
+        
         self.compiled_function = getattr(cppyy.gbl, self.function_name)
         
-        print(f" Proxy object created: {type(self.compiled_function)}")
-        print(f" Function signature: {self.compiled_function.__doc__}")
-        
-        # At this point in memory:
-        # - Python has a CPPOverload proxy object
-        # - The proxy has a NULL function pointer
-        # - Cling has the AST ready to compile when needed
+        if self.verbose:
+            print(f"Proxy object created: {type(self.compiled_function).__name__}")
+            if self.compiled_function.__doc__:
+                sig = self.compiled_function.__doc__.split('\n')[0]
+                print(f"Signature: {sig}")
     
     def prepare_namespace(self):
         """
@@ -143,8 +159,9 @@ class CppyyCodeObject:
         For arrays: Get the NumPy array (cppyy extracts pointer automatically)
         For constants: Get the numeric value
         """
-        print(f"\nNAMESPACE PREPARATION")
-        print(f"   Building argument list...")
+        if self.verbose:
+            print(f"\n   NAMESPACE PREPARATION")
+            print(f"   Building argument list...")
         
         self.namespace = {}
         
@@ -154,20 +171,53 @@ class CppyyCodeObject:
                 # cppyy will automatically extract the data pointer
                 array = var.get_value()
                 self.namespace[name] = array
-                print(f"   • {name}: array shape={array.shape}, "
-                      f"ptr={array.ctypes.data:#x}")
+                if self.verbose:
+                    print(f"   • {name}: array shape={array.shape}, "
+                          f"ptr={array.ctypes.data:#x}")
                 
             elif isinstance(var, Constant):
                 # Get the constant value
                 value = var.get_value()
                 self.namespace[name] = value
-                print(f"   • {name}: constant value={value}")
+                if self.verbose:
+                    print(f"   • {name}: constant value={value}")
         
         # Add neuron count (derived from array size)
         if 'v' in self.namespace:
             n_neurons = len(self.namespace['v'])
             self.namespace['n_neurons'] = n_neurons
-            print(f"   • n_neurons: {n_neurons}")
+            if self.verbose:
+                print(f"   • n_neurons: {n_neurons}")
+    
+    def _build_args(self) -> List[Any]:
+        """
+        Build the argument list in the correct order for the C++ function.
+        
+        The order must match the function signature exactly:
+        1. Array pointers (in variable order)
+        2. Constants (in variable order)
+        3. n_neurons
+        
+        Returns:
+            List of arguments ready to pass to the C++ function
+        """
+        args = []
+        
+        # Arrays first
+        for name, var in self.variables.items():
+            if isinstance(var, ArrayVariable):
+                args.append(self.namespace[name])
+        
+        # Then constants
+        for name, var in self.variables.items():
+            if isinstance(var, Constant):
+                args.append(self.namespace[name])
+        
+        # Finally n_neurons
+        if 'n_neurons' in self.namespace:
+            args.append(self.namespace['n_neurons'])
+        
+        return args
     
     def __call__(self):
         """
@@ -191,56 +241,45 @@ class CppyyCodeObject:
         4. Return to Python
         
         PERFORMANCE:
-        - First call: ~0.05-0.5 seconds (includes compilation)
-        - Later calls: ~0.0001-0.001 seconds (pure execution)
+        - First call: ~10-100ms (includes compilation)
+        - Later calls: ~0.01-0.1ms (pure execution)
         """
-        print(f"\n EXECUTION PHASE")
+        self._execution_count += 1
         
-        # Build argument list in correct order
-        # Must match the C++ function signature!
-        args = []
+        args = self._build_args()
         
-        # The order is: arrays, then constants, then n_neurons
-        for name, var in self.variables.items():
-            if isinstance(var, ArrayVariable):
-                args.append(self.namespace[name])
+        if self.verbose and not self._first_call_done:
+            print(f"\n   EXECUTION #{self._execution_count} (FIRST - will JIT compile)")
+            print(f"   Calling {self.function_name} with {len(args)} arguments...")
         
-        for name, var in self.variables.items():
-            if isinstance(var, Constant):
-                args.append(self.namespace[name])
-        
-        args.append(self.namespace['n_neurons'])
-        
-        print(f"   Calling C++ function with {len(args)} arguments...")
-        
-        # THIS IS THE MAGIC MOMENT!
-        # On first call: triggers JIT compilation
-        # On later calls: directly executes machine code
-        
-        import time
-        start = time.time()
-        
+        # Execute the function
+        # On first call, this triggers JIT compilation
         result = self.compiled_function(*args)
         
-        elapsed = time.time() - start
-        
-        print(f"Execution complete in {elapsed*1000:.4f} ms")
-        
-        if not hasattr(self, '_first_call_done'):
-            print(f"   (First call: included JIT compilation time)")
+        if not self._first_call_done:
             self._first_call_done = True
-        else:
-            print(f"   (Subsequent call: pure execution time)")
+            if self.verbose:
+                print(f"   JIT compilation complete")
+                print(f"   Machine code now cached")
         
         return result
     
     def show_generated_code(self):
         """Display the generated C++ code with line numbers."""
         print(f"\n{'='*70}")
-        print(f"GENERATED C++ CODE")
+        print(f"Generated C++ code for: {self.name}")
         print(f"{'='*70}")
         for i, line in enumerate(self.code.split('\n'), 1):
             print(f"{i:3d} | {line}")
-        print(f"{'='*70}")            
-        print(f"{i:3d} | {line}")
         print(f"{'='*70}")
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get statistics about this CodeObject."""
+        return {
+            'name': self.name,
+            'function_name': self.function_name,
+            'code_length': len(self.code),
+            'execution_count': self._execution_count,
+            'is_compiled': self._first_call_done,
+            'num_variables': len(self.variables),
+        }
