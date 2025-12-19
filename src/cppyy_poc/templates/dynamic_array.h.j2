@@ -1,0 +1,119 @@
+// ============================================================================
+// Dynamic Array Classes for Brian2 cppyy POC
+// ============================================================================
+//
+// These classes provide efficient dynamically-sized arrays that:
+// - Grow amortized O(1) using over-allocation strategy
+// - Store data in row-major order for NumPy compatibility
+// - Support direct pointer access for zero-copy interop
+//
+// Based on Brian2's brianlib/dynamic_array.h
+// ============================================================================
+
+#ifndef BRIAN_POC_DYNAMIC_ARRAY_H
+#define BRIAN_POC_DYNAMIC_ARRAY_H
+
+#include <vector>
+#include <algorithm>
+#include <cstddef>
+
+namespace {{ namespace }} {
+
+/**
+ * A 2D dynamic array stored in row-major (C) order.
+ * 
+ * Memory Layout:
+ *   For a 3x4 array:
+ *   row 0: [0][1][2][3]
+ *   row 1: [4][5][6][7]
+ *   row 2: [8][9][10][11]
+ * 
+ * This matches NumPy's default C-contiguous layout, enabling
+ * zero-copy data sharing via pointers.
+ */
+template<typename T>
+class DynamicArray2D {
+private:
+    std::vector<T> m_buffer;     // Underlying flat storage
+    size_t m_rows;               // Number of logical rows
+    size_t m_cols;               // Number of logical columns
+    double m_growth_factor;      // Over-allocation multiplier
+    
+    // Convert 2D index to flat index (row-major)
+    inline size_t flat_index(size_t row, size_t col) const {
+        return row * m_cols + col;
+    }
+
+public:
+    /**
+     * Construct a 2D array with given dimensions.
+     * 
+     * @param rows Initial number of rows
+     * @param cols Initial number of columns
+     * @param growth_factor Multiplier for over-allocation (default 2.0)
+     */
+    DynamicArray2D(size_t rows = 0, size_t cols = 0, double growth_factor = 2.0)
+        : m_rows(rows), m_cols(cols), m_growth_factor(growth_factor)
+    {
+        m_buffer.resize(rows * cols, T(0));
+    }
+    
+    /**
+     * Resize the array, preserving existing data where possible.
+     * 
+     * Uses over-allocation to achieve amortized O(1) growth:
+     * If new size exceeds buffer, allocate size * growth_factor
+     * 
+     * @param new_rows New number of rows
+     * @param new_cols New number of columns
+     */
+    void resize(size_t new_rows, size_t new_cols) {
+        if (new_rows == m_rows && new_cols == m_cols) {
+            return;  // No change needed
+        }
+        
+        // Allocate new buffer
+        std::vector<T> new_buffer(new_rows * new_cols, T(0));
+        
+        // Copy existing data
+        size_t copy_rows = std::min(m_rows, new_rows);
+        size_t copy_cols = std::min(m_cols, new_cols);
+        
+        for (size_t i = 0; i < copy_rows; ++i) {
+            for (size_t j = 0; j < copy_cols; ++j) {
+                new_buffer[i * new_cols + j] = m_buffer[flat_index(i, j)];
+            }
+        }
+        
+        m_buffer.swap(new_buffer);
+        m_rows = new_rows;
+        m_cols = new_cols;
+    }
+    
+    // Element access
+    T& operator()(size_t row, size_t col) {
+        return m_buffer[flat_index(row, col)];
+    }
+    
+    const T& operator()(size_t row, size_t col) const {
+        return m_buffer[flat_index(row, col)];
+    }
+    
+    // Raw pointer access for NumPy interop
+    T* data() { return m_buffer.data(); }
+    const T* data() const { return m_buffer.data(); }
+    
+    // Dimension queries
+    size_t rows() const { return m_rows; }
+    size_t cols() const { return m_cols; }
+    size_t size() const { return m_buffer.size(); }
+};
+
+// Explicit template instantiations for common types
+template class DynamicArray2D<double>;
+template class DynamicArray2D<float>;
+template class DynamicArray2D<int>;
+
+}  // namespace {{ namespace }}
+
+#endif  // BRIAN_POC_DYNAMIC_ARRAY_H

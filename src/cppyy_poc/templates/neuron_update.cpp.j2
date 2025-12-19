@@ -1,27 +1,80 @@
+// ============================================================================
 // Auto-generated C++ code for neuron state update
+// ============================================================================
+// 
 // This function was generated from a differential equation by the
 // Brian2-style template system. It will be JIT compiled by cppyy.
+//
+// COMPILATION FLOW:
+// 1. Jinja2 renders this template with variable info
+// 2. Result is a pure C++ string
+// 3. cppyy.cppdef() parses the C++ and builds AST
+// 4. First call triggers LLVM JIT compilation
+// 5. Subsequent calls execute native machine code
+//
+// MEMORY MODEL:
+// - Array parameters (v, I) are pointers to NumPy data
+// - Changes here directly modify the Python arrays!
+// - No data copying occurs (zero-copy)
+// ============================================================================
 
 #include <cmath>
 
+{% if namespace %}
+namespace {{ namespace }} {
+{% endif %}
+
+/**
+ * Update neuron states using Euler integration.
+ * 
+ * Equation: {{ equation }}
+ * 
+ * @param v      Pointer to voltage array (modified in-place)
+ * @param I      Pointer to input current array (read-only)
+ * @param dt     Integration timestep in seconds
+ * @param tau    Time constant in seconds
+ * @param n_neurons Number of neurons to update
+ */
 void {{ function_name }}(
     {% for param in parameters -%}
     {{ param }}{% if not loop.last %},{% endif %}
 
     {% endfor -%}
 ) {
+    // ========================================================================
     // Integration loop: {{ equation }}
-    // Each iteration updates one neuron using Euler integration
+    // ========================================================================
+    // 
+    // Each iteration updates one neuron using forward Euler integration:
+    //   v_new = v_old + dt * dv/dt
+    // 
+    // The RHS (dv/dt) is computed from the user's equation.
+    // ========================================================================
     
     for (int {{ loop_variable }} = 0; {{ loop_variable }} < n_neurons; {{ loop_variable }}++) {
+        // --------------------------------------------------------------------
         // Read current state
+        // --------------------------------------------------------------------
+        // These local variables provide cleaner code and potentially
+        // better optimization (compiler can use registers).
         double v_current = v[{{ loop_variable }}];
         double I_current = I[{{ loop_variable }}];
         
+        // --------------------------------------------------------------------
         // Compute derivative
+        // --------------------------------------------------------------------
+        // This is the right-hand side of: {{ equation }}
         double dv_dt = {{ equation_rhs }};
         
-        // Euler integration step: v_new = v_old + dt * dv_dt
+        // --------------------------------------------------------------------
+        // Euler integration step
+        // --------------------------------------------------------------------
+        // v_new = v_old + dt * dv_dt
+        // This directly modifies the NumPy array through the pointer!
         v[{{ loop_variable }}] = v_current + dt * dv_dt;
     }
 }
+
+{% if namespace %}
+}  // namespace {{ namespace }}
+{% endif %}

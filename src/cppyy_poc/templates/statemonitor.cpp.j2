@@ -1,0 +1,73 @@
+// ============================================================================
+// Auto-generated C++ code for StateMonitor recording
+// ============================================================================
+//
+// This function records state variables from a NeuronGroup at each timestep.
+// Data is stored in dynamically-growing 2D arrays (rows=time, cols=neurons).
+//
+// RECORDING STRATEGY:
+// 1. Append current time to time vector
+// 2. Resize recorded arrays to add new row
+// 3. Copy values from source arrays at monitored indices
+//
+// This is called once per timestep AFTER the source group has been updated.
+// ============================================================================
+
+#include <vector>
+
+{% if namespace %}
+namespace {{ namespace }} {
+{% endif %}
+
+/**
+ * Record current state of monitored variables.
+ * 
+ * @param t_vec         Vector to append current time to
+ * @param current_time  Current simulation time in seconds
+ * @param indices       Array of neuron indices to record
+ * @param n_indices     Number of indices to record
+{% for varname in recorded_variables %}
+ * @param source_{{ varname }}    Source array for {{ varname }}
+ * @param recorded_{{ varname }}  2D array to store recorded {{ varname }} values
+{% endfor %}
+ */
+void {{ function_name }}(
+    std::vector<double>& t_vec,
+    double current_time,
+    int* indices,
+    int n_indices,
+    {% for varname in recorded_variables -%}
+    double* source_{{ varname }},
+    DynamicArray2D<double>& recorded_{{ varname }}{% if not loop.last %},{% endif %}
+
+    {% endfor -%}
+) {
+    // ========================================================================
+    // Step 1: Record time
+    // ========================================================================
+    t_vec.push_back(current_time);
+    size_t new_row = t_vec.size() - 1;
+    
+    // ========================================================================
+    // Step 2: Resize storage arrays
+    // ========================================================================
+    // Each recorded variable needs a new row for this timestep
+    {% for varname in recorded_variables %}
+    recorded_{{ varname }}.resize(new_row + 1, n_indices);
+    {% endfor %}
+    
+    // ========================================================================
+    // Step 3: Copy values at monitored indices
+    // ========================================================================
+    for (int i = 0; i < n_indices; ++i) {
+        int src_idx = indices[i];
+        
+        {% for varname in recorded_variables %}
+        recorded_{{ varname }}(new_row, i) = source_{{ varname }}[src_idx];
+        {% endfor %}
+    }
+}
+
+{% if namespace %}
+}  // namespace {{ namespace }}
+{% endif %}
